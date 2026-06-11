@@ -3,9 +3,10 @@
 Bare-minimum proof that an app (no signed-in user) can send a Teams message
 directly to a user. This is the same pattern your MCP server would use.
 
-**Status: proven working end to end** — bot receives messages through a dev
-tunnel, captures conversation references, and pushes proactive 1:1 messages
-using only app credentials.
+**Status: proven working end to end** — hosted on a free Azure App Service,
+the bot captures conversation references and pushes proactive 1:1 messages
+using a managed identity + federated credential. No client secret exists
+anywhere in the setup.
 
 ## Why a bot, and not Graph or a webhook?
 
@@ -27,7 +28,7 @@ This is the complete inventory. There is nothing else.
 
 | Privilege | Scope | Who grants it |
 |---|---|---|
-| App registration + credential (client secret, or a federated credential — see "Hosting in Azure" below for the secretless option) | Identity only — grants nothing by itself | Entra ID (any app admin) |
+| App registration + federated credential (no client secret) | Identity only — grants nothing by itself | Entra ID (any app admin) |
 | Service principal for that app | Required for the tenant to issue tokens to the app (`az ad sp create --id <appId>`) | Entra ID |
 | Azure Bot resource (F0, free) | Control plane only — links the app ID to the Teams channel | Azure subscription contributor |
 | Teams app in the org catalog | Lets users (or admins) install the bot | Teams admin |
@@ -159,8 +160,9 @@ usually what security actually asks for.
 - An M365 tenant where you're admin (your personal/dev tenant) with Teams.
 - **Custom app upload enabled:** Teams admin center → Teams apps → Setup
   policies → Global → turn on "Upload custom apps".
-- An Azure subscription (the Azure Bot resource is free at F0 tier).
-- Node 18+.
+- An Azure subscription (every resource used is free: Azure Bot at F0,
+  App Service at F1, managed identity).
+- The Azure CLI (`az`).
 
 ## Setup
 
@@ -171,10 +173,13 @@ Entra ID → App registrations → New registration:
 - Supported account types: **Accounts in this organizational directory only** (single tenant)
 - No redirect URI needed.
 
-Then: Certificates & secrets → New client secret. Record:
+Record:
 - Application (client) ID → `BOT_APP_ID`
-- Secret value → `BOT_APP_SECRET`
 - Directory (tenant) ID → `TENANT_ID`
+
+Do **not** create a client secret. The app's only credential is the federated
+credential added in step 3, which trusts a managed identity — nothing to
+rotate, leak, or expire.
 
 **Also create the service principal** — the portal does this implicitly in
 some flows, the CLI does not, and without it token requests fail with
@@ -191,7 +196,6 @@ CLI equivalent of the whole step:
 ```powershell
 az ad app create --display-name teams-notify-test --sign-in-audience AzureADMyOrg
 az ad sp create --id <appId>
-az ad app credential reset --id <appId> --display-name bot-secret --years 1
 ```
 
 ### 2. Azure Bot resource
@@ -216,33 +220,64 @@ az bot create --resource-group rg-teams-notify-test --name <botName> `
 az bot msteams create --name <botName> --resource-group rg-teams-notify-test
 ```
 
-### 3. Run the app
+### 3. Managed identity + federated credential
+
+The app authenticates as the app registration by requesting a
+managed-identity token for the special audience `api://AzureADTokenExchange`
+and presenting it as a `client_assertion` to the Entra token endpoint —
+two REST calls (see `getBotToken()` in `server.js`), no SDK, no secret.
 
 ```powershell
-Copy-Item .env.example .env   # then fill in the three values
-npm install
-npm start
+az identity create --name id-teams-notify-test --resource-group rg-teams-notify-test --location eastus
+# record its clientId, principalId, and id (the full resource id)
 ```
 
-### 4. Expose it publicly
+Then add the federated credential on the app registration, trusting that
+identity (`fic.json`):
 
-Teams must be able to reach `/api/messages`. Easiest local option is the
-Microsoft dev tunnel CLI:
-
-```powershell
-winget install Microsoft.devtunnel
-devtunnel user login
-devtunnel create teams-bot-test --allow-anonymous
-devtunnel port create teams-bot-test -p 3000
-devtunnel host teams-bot-test
+```json
+{
+  "name": "uami-id-teams-notify-test",
+  "issuer": "https://login.microsoftonline.com/<TENANT_ID>/v2.0",
+  "subject": "<identity principalId>",
+  "audiences": ["api://AzureADTokenExchange"]
+}
 ```
 
-Copy the public URL it prints and update the bot's messaging endpoint:
+```powershell
+az ad app federated-credential create --id <BOT_APP_ID> --parameters fic.json
+```
+
+### 4. Host the app on a free App Service
+
+F1 quota is per-region — try another region if you get a quota error.
 
 ```powershell
+az appservice plan create --name plan-teams-notify-test --resource-group rg-teams-notify-test `
+  --location westus2 --sku F1 --is-linux
+az webapp create --name <appName> --plan plan-teams-notify-test `
+  --resource-group rg-teams-notify-test --runtime "NODE:22-lts"
+az webapp identity assign --name <appName> --resource-group rg-teams-notify-test `
+  --identities <identity resource id>
+az webapp config appsettings set --name <appName> --resource-group rg-teams-notify-test --settings `
+  BOT_APP_ID=<BOT_APP_ID> TENANT_ID=<TENANT_ID> AZURE_CLIENT_ID=<identity clientId> `
+  SCM_DO_BUILD_DURING_DEPLOYMENT=true   # note: no secret anywhere
+
+# Deploy (use tar.exe, not Compress-Archive — the latter writes backslash
+# paths into the zip, which breaks extraction on Linux)
+tar.exe -a -cf deploy.zip server.js package.json package-lock.json public
+az webapp deploy --name <appName> --resource-group rg-teams-notify-test --src-path deploy.zip --type zip
+
+# Point Teams at the bot
 az bot update --resource-group rg-teams-notify-test --name <botName> `
-  --endpoint https://<tunnel-url>/api/messages
+  --endpoint https://<appName>.azurewebsites.net/api/messages
 ```
+
+F1 caveats: no Always On, so the app sleeps after ~20 minutes idle and the
+first *inbound* message after that hits a cold start (a few seconds —
+proactive sends are unaffected); 60 CPU-minutes/day. Also note a redeploy
+overwrites `conversations.json` in `wwwroot` — references are recaptured on
+the next message, or use real storage.
 
 ### 5. Teams app package
 
@@ -262,60 +297,10 @@ Compress-Archive -Path manifest\manifest.json, manifest\color.png, manifest\outl
 1. In Teams, open the installed bot and send it any message ("hi"). The bot
    echoes back a confirmation and the server stores the conversation
    reference in `conversations.json`.
-2. Open http://localhost:3000, pick the user, type a message, click send.
+2. Open `https://<appName>.azurewebsites.net`, pick the user, type a message,
+   click send.
 3. The message arrives in Teams as a 1:1 chat from the bot — no user session
    involved, pure app credentials.
-
-## Hosting in Azure (free) with federated credentials — no client secret
-
-The whole stack also runs at $0/month on Azure, and doing so removes the
-client secret entirely: a **user-assigned managed identity** plus a
-**federated credential** on the app registration replaces it. There is then
-no secret to rotate, leak, or expire anywhere.
-
-How it works: `getBotToken()` picks the flow automatically. If
-`BOT_APP_SECRET` is set (local dev) it uses the classic secret flow.
-Otherwise it requests a managed-identity token for the special audience
-`api://AzureADTokenExchange` from the App Service identity endpoint and
-presents it as a `client_assertion` to the same Entra token endpoint —
-two REST calls, still no SDK.
-
-```powershell
-# 1. Managed identity (free)
-az identity create --name id-teams-notify-test --resource-group rg-teams-notify-test --location eastus
-# note its clientId and principalId
-
-# 2. Federated credential on the app registration, trusting that identity
-#    (fic.json: name, issuer https://login.microsoftonline.com/<tenantId>/v2.0,
-#     subject = identity principalId, audiences ["api://AzureADTokenExchange"])
-az ad app federated-credential create --id <BOT_APP_ID> --parameters fic.json
-
-# 3. Free App Service with the identity attached (F1 quota is per-region — try
-#    another region if you get a quota error)
-az appservice plan create --name plan-teams-notify-test --resource-group rg-teams-notify-test `
-  --location westus2 --sku F1 --is-linux
-az webapp create --name <appName> --plan plan-teams-notify-test `
-  --resource-group rg-teams-notify-test --runtime "NODE:22-lts"
-az webapp identity assign --name <appName> --resource-group rg-teams-notify-test --identities <identity resource id>
-az webapp config appsettings set --name <appName> --resource-group rg-teams-notify-test --settings `
-  BOT_APP_ID=<BOT_APP_ID> TENANT_ID=<TENANT_ID> AZURE_CLIENT_ID=<identity clientId> `
-  SCM_DO_BUILD_DURING_DEPLOYMENT=true   # note: no secret
-
-# 4. Deploy (use tar.exe, not Compress-Archive — the latter writes backslash
-#    paths into the zip, which breaks extraction on Linux)
-tar.exe -a -cf deploy.zip server.js package.json package-lock.json public
-az webapp deploy --name <appName> --resource-group rg-teams-notify-test --src-path deploy.zip --type zip
-
-# 5. Teams now reaches the bot directly — no dev tunnel
-az bot update --resource-group rg-teams-notify-test --name <botName> `
-  --endpoint https://<appName>.azurewebsites.net/api/messages
-```
-
-F1 caveats: no Always On, so the app sleeps after ~20 minutes idle and the
-first *inbound* message after that hits a cold start (a few seconds —
-proactive sends are unaffected); 60 CPU-minutes/day. Also note a redeploy
-overwrites `conversations.json` in `wwwroot` — references are recaptured on
-the next message, or use real storage.
 
 ## What this means for the real MCP server
 
@@ -324,10 +309,10 @@ the next message, or use real storage.
 - Users can be onboarded without ever messaging the bot: assign an app setup
   policy to an Entra group (see "Zero-touch onboarding" above) and the
   conversation references arrive automatically as Teams installs the app.
-- What you'd need from central IT: an app registration (with a secret, or
-  secretless via a federated credential + managed identity) + service
-  principal, an Azure Bot resource, and the Teams app approved into the org
-  catalog scoped to a target group. That's the full list — no mailbox, no
+- What you'd need from central IT: an app registration + service principal
+  (no secret — a federated credential trusts the hosting managed identity),
+  an Azure Bot resource, and the Teams app approved into the org catalog
+  scoped to a target group. That's the full list — no mailbox, no
   Graph chat permissions, no admin consent.
 - Production hardening not in this sample: validate the JWT on incoming
   `/api/messages` requests (issuer `api.botframework.com`), cache the bot
