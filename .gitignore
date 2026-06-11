@@ -2,3 +2,4 @@ node_modules/
 .env
 conversations.json
 notify-test-bot.zip
+deploy.zip

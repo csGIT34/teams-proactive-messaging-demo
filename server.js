@@ -33,21 +33,48 @@ function saveStore(store) {
 }
 
 // ---- bot access token (client credentials) ----
+//
+// Two credential modes:
+//  - Federated (no secret): when running in Azure with a user-assigned managed
+//    identity, get a managed-identity token for api://AzureADTokenExchange and
+//    present it as a client_assertion. The app registration trusts the identity
+//    via a federated credential, so no client secret exists anywhere.
+//  - Secret (local dev fallback): classic client_secret flow when BOT_APP_SECRET is set.
+
+async function getManagedIdentityAssertion() {
+  // App Service injects IDENTITY_ENDPOINT/IDENTITY_HEADER for managed identity.
+  const url = new URL(process.env.IDENTITY_ENDPOINT);
+  url.searchParams.set("api-version", "2019-08-01");
+  url.searchParams.set("resource", "api://AzureADTokenExchange");
+  url.searchParams.set("client_id", process.env.AZURE_CLIENT_ID); // which user-assigned identity
+  const res = await fetch(url, {
+    headers: { "X-IDENTITY-HEADER": process.env.IDENTITY_HEADER },
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(`Managed identity token failed: ${JSON.stringify(body)}`);
+  return body.access_token;
+}
 
 async function getBotToken() {
   // Single-tenant bots authenticate against your tenant; multi-tenant bots use botframework.com.
   const authority = TENANT_ID || "botframework.com";
+  const params = {
+    grant_type: "client_credentials",
+    client_id: BOT_APP_ID,
+    scope: "https://api.botframework.com/.default",
+  };
+  if (BOT_APP_SECRET) {
+    params.client_secret = BOT_APP_SECRET;
+  } else {
+    params.client_assertion_type = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+    params.client_assertion = await getManagedIdentityAssertion();
+  }
   const res = await fetch(
     `https://login.microsoftonline.com/${authority}/oauth2/v2.0/token`,
     {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "client_credentials",
-        client_id: BOT_APP_ID,
-        client_secret: BOT_APP_SECRET,
-        scope: "https://api.botframework.com/.default",
-      }),
+      body: new URLSearchParams(params),
     }
   );
   const body = await res.json();
