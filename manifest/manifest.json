@@ -1,0 +1,36 @@
+﻿{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "b1aa32b7-7cd9-4084-bf22-ac661dd723d4",
+  "developer": {
+    "name": "Personal Test",
+    "websiteUrl": "https://example.com",
+    "privacyUrl": "https://example.com/privacy",
+    "termsOfUseUrl": "https://example.com/terms"
+  },
+  "name": {
+    "short": "Notify Test Bot",
+    "full": "Proactive Notification Test Bot"
+  },
+  "description": {
+    "short": "Tests proactive messages from an app",
+    "full": "Bare-minimum bot used to test sending proactive Teams messages from a web app."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#5B6AF0",
+  "bots": [
+    {
+      "botId": "b1aa32b7-7cd9-4084-bf22-ac661dd723d4",
+      "scopes": ["personal"],
+      "supportsFiles": false,
+      "isNotificationOnly": false
+    }
+  ],
+  "permissions": ["identity"],
+  "validDomains": []
+}
+

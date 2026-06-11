@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Teams Proactive Message Test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 3rem auto; padding: 0 1rem; }
+    label { display: block; margin: 1rem 0 0.25rem; font-weight: 600; }
+    select, textarea, button { width: 100%; padding: 0.5rem; font-size: 1rem; box-sizing: border-box; }
+    button { margin-top: 1rem; cursor: pointer; background: #5b6af0; color: white; border: none; border-radius: 4px; padding: 0.75rem; }
+    #status { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; display: none; }
+    #status.ok { display: block; background: #e6f6e6; color: #1a6b1a; }
+    #status.err { display: block; background: #fdecec; color: #a02020; }
+    .empty { color: #888; font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>Teams Proactive Message Test</h1>
+  <p>Users appear below once they install the bot in Teams or send it a message.</p>
+
+  <label for="user">Recipient</label>
+  <select id="user"></select>
+
+  <label for="text">Message</label>
+  <textarea id="text" rows="3" placeholder="Hello from the app!"></textarea>
+
+  <button id="send">Send Teams message</button>
+  <div id="status"></div>
+
+  <script>
+    const userSelect = document.getElementById("user");
+    const status = document.getElementById("status");
+
+    async function loadUsers() {
+      const res = await fetch("/api/conversations");
+      const store = await res.json();
+      const entries = Object.entries(store);
+      userSelect.innerHTML = "";
+      if (entries.length === 0) {
+        userSelect.innerHTML = '<option disabled selected>No users captured yet — message the bot in Teams first</option>';
+        return;
+      }
+      for (const [aadObjectId, ref] of entries) {
+        const opt = document.createElement("option");
+        opt.value = aadObjectId;
+        opt.textContent = `${ref.userName} (captured ${new Date(ref.capturedAt).toLocaleString()})`;
+        userSelect.appendChild(opt);
+      }
+    }
+
+    document.getElementById("send").addEventListener("click", async () => {
+      status.className = "";
+      const res = await fetch("/api/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          aadObjectId: userSelect.value,
+          text: document.getElementById("text").value,
+        }),
+      });
+      const body = await res.json();
+      if (res.ok) {
+        status.textContent = "Sent! Check Teams.";
+        status.className = "ok";
+      } else {
+        status.textContent = "Failed: " + body.error;
+        status.className = "err";
+      }
+    });
+
+    loadUsers();
+    setInterval(loadUsers, 5000);
+  </script>
+</body>
+</html>
