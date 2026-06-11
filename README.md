@@ -3,6 +3,35 @@
 Bare-minimum proof that an app (no signed-in user) can send a Teams message
 directly to a user. This is the same pattern your MCP server would use.
 
+## TL;DR
+
+A small Node server, hosted on a free Azure App Service, sends 1:1 Teams
+messages to users with no user signed in, no Graph permissions, and no
+client secret.
+
+How it works:
+
+1. The App Service runs as a **user-assigned managed identity**. That
+   identity is the app registration's only credential (a federated
+   credential) — the server exchanges a managed-identity token for a Bot
+   Framework token, so no secret exists anywhere.
+2. When a user installs or messages the bot in Teams, the server captures a
+   **conversation reference** (one-time, per user). From then on it can push
+   a 1:1 message to that user at any time — two REST calls, no SDK.
+3. Microsoft enforces the boundary: the bot can only message users whose
+   Teams client has the app installed, and it can read nothing — no chats,
+   no mail, no directory.
+
+Resources needed (all free):
+
+| Resource | Purpose |
+|---|---|
+| Entra app registration + service principal | The bot's identity (no secret on it) |
+| User-assigned managed identity | The app registration's only credential |
+| Azure Bot (F0) | Links the identity to the Teams channel |
+| App Service (F1) | Hosts the server |
+| Teams app in the org catalog | Lets users (or an admin policy) install the bot |
+
 **Status: proven working end to end** — hosted on a free Azure App Service,
 the bot captures conversation references and pushes proactive 1:1 messages
 using a managed identity + federated credential. No client secret exists
