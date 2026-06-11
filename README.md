@@ -28,8 +28,9 @@ This is the complete inventory. There is nothing else.
 
 | Privilege | Scope | Who grants it |
 |---|---|---|
-| App registration + federated credential (no client secret) | Identity only — grants nothing by itself | Entra ID (any app admin) |
+| App registration + federated credential (no client secret) | The bot's identity — grants nothing by itself | Entra ID (any app admin) |
 | Service principal for that app | Required for the tenant to issue tokens to the app (`az ad sp create --id <appId>`) | Entra ID |
+| User-assigned managed identity (free) | The app registration's only credential — the hosting App Service runs as it, so no secret exists | Azure subscription contributor |
 | Azure Bot resource (F0, free) | Control plane only — links the app ID to the Teams channel | Azure subscription contributor |
 | Teams app in the org catalog | Lets users (or admins) install the bot | Teams admin |
 
