@@ -24,13 +24,15 @@ How it works:
 
 Resources needed (all free):
 
-| Resource | Purpose |
-|---|---|
-| Entra app registration + service principal | The bot's identity (no secret on it) |
-| User-assigned managed identity | The app registration's only credential |
-| Azure Bot (F0) | Links the identity to the Teams channel |
-| App Service (F1) | Hosts the server |
-| Teams app in the org catalog | Lets users (or an admin policy) install the bot |
+| Resource | Purpose | Who does it |
+|---|---|---|
+| Entra app registration + service principal | The bot's identity (no secret on it) | Our team |
+| User-assigned managed identity | The app registration's only credential | Our team |
+| Azure Bot (F0) | Links the identity to the Teams channel | Our team |
+| App Service (F1) | Hosts the server | Our team |
+| Teams app in the org catalog | Lets users (or an admin policy) install the bot | **Teams admin** — approves the app into the catalog, scopes it to users/groups, and (optionally) assigns a setup policy for auto-install |
+
+The Teams admin step is the only work outside our team.
 
 **Status: proven working end to end** — hosted on a free Azure App Service,
 the bot captures conversation references and pushes proactive 1:1 messages
